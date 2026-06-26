@@ -1,6 +1,8 @@
 import * as XLSX from 'xlsx';
 import mammoth from 'mammoth';
 
+const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY;
+
 const HEADER_FIELDS = [
   'ORDER_TYPE', 'SALES_ORG', 'SOLD_TO_PARTY', 'SHIP_TO_PARTY',
   'PO_NO', 'PURCHASE_ORDER_DATE', 'REQ_DELIVERY_DATE',
@@ -50,12 +52,120 @@ async function parseExcel(file) {
   return { header, items };
 }
 
+// ---- AI Extraction using Groq ----
+async function extractWithGroq(text) {
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${GROQ_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      max_tokens: 1000,
+      messages: [
+        {
+          role: 'user',
+          content: `Extract order data from the following document text and return ONLY a valid JSON object with these exact keys. If a value is not found, use empty string "".
+
+Keys to extract:
+- ORDER_TYPE (usually ZDOM or ZEXP)
+- SALES_ORG (sales organization code)
+- SOLD_TO_PARTY (customer/buyer code or name)
+- SHIP_TO_PARTY (delivery address or code)
+- PO_NO (Purchase Order Number)
+- PURCHASE_ORDER_DATE (format DD-MM-YYYY)
+- REQ_DELIVERY_DATE (required delivery date, format DD-MM-YYYY)
+- INCOTERM (shipping terms like FOB, CIF etc)
+- INCOTERM2 (secondary incoterm if present)
+- ALT_TAX_CLASSF (tax classification)
+- CUSTOMER_GROUP
+- PAYER (payer code)
+- SPECIAL_STOCK_PARTNER
+- MATERIAL_NUMBER (product/material code, can be multiple - return as array)
+- QUANTITY (numeric value only, can be multiple - return as array)
+- SALES_UNIT (KG, Nos, PCS etc, can be multiple - return as array)
+- DELIVERY_DATE (format DD-MM-YYYY, can be multiple - return as array)
+- PLANT (plant code)
+- CONDITION_TYPE_1
+- AMOUNT_1
+- CONDITION_TYPE_2
+- AMOUNT_2
+
+IMPORTANT: Return ONLY the JSON object, no explanation, no markdown, no code blocks.
+
+Document text:
+${text}`
+        }
+      ]
+    })
+  });
+
+  const data = await response.json();
+  
+  if (!data.choices || !data.choices[0]) {
+    throw new Error('Groq API error: ' + JSON.stringify(data));
+  }
+
+  const raw = data.choices[0].message.content.trim();
+  
+  // Clean any markdown if present
+  const cleaned = raw.replace(/```json|```/g, '').trim();
+  const parsed = JSON.parse(cleaned);
+
+  const header = {
+    ORDER_TYPE: parsed.ORDER_TYPE || '',
+    SALES_ORG: parsed.SALES_ORG || '',
+    SOLD_TO_PARTY: parsed.SOLD_TO_PARTY || '',
+    SHIP_TO_PARTY: parsed.SHIP_TO_PARTY || '',
+    PO_NO: parsed.PO_NO || '',
+    PURCHASE_ORDER_DATE: parsed.PURCHASE_ORDER_DATE || '',
+    REQ_DELIVERY_DATE: parsed.REQ_DELIVERY_DATE || '',
+    INCOTERM: parsed.INCOTERM || '',
+    INCOTERM2: parsed.INCOTERM2 || '',
+    ALT_TAX_CLASSF: parsed.ALT_TAX_CLASSF || '',
+    CUSTOMER_GROUP: parsed.CUSTOMER_GROUP || '',
+    PAYER: parsed.PAYER || '',
+    SPECIAL_STOCK_PARTNER: parsed.SPECIAL_STOCK_PARTNER || '',
+  };
+
+  // Handle multiple items (arrays)
+  const materialNumbers = Array.isArray(parsed.MATERIAL_NUMBER) 
+    ? parsed.MATERIAL_NUMBER 
+    : [parsed.MATERIAL_NUMBER || ''];
+  
+  const quantities = Array.isArray(parsed.QUANTITY)
+    ? parsed.QUANTITY
+    : [parsed.QUANTITY || ''];
+  
+  const salesUnits = Array.isArray(parsed.SALES_UNIT)
+    ? parsed.SALES_UNIT
+    : [parsed.SALES_UNIT || ''];
+  
+  const deliveryDates = Array.isArray(parsed.DELIVERY_DATE)
+    ? parsed.DELIVERY_DATE
+    : [parsed.DELIVERY_DATE || ''];
+
+  const items = materialNumbers.map((mat, i) => ({
+    MATERIAL_NUMBER: mat || '',
+    QUANTITY: quantities[i] || '',
+    SALES_UNIT: salesUnits[i] || '',
+    DELIVERY_DATE: deliveryDates[i] || '',
+    PLANT: parsed.PLANT || '',
+    CONDITION_TYPE_1: parsed.CONDITION_TYPE_1 || '',
+    AMOUNT_1: parsed.AMOUNT_1 || '',
+    CONDITION_TYPE_2: parsed.CONDITION_TYPE_2 || '',
+    AMOUNT_2: parsed.AMOUNT_2 || '',
+  }));
+
+  return { header, items };
+}
+
 // ---- PDF ----
 async function parsePdf(file) {
   const data = await file.arrayBuffer();
 
   return new Promise((resolve, reject) => {
-    // Remove existing script if already loaded
     const existingScript = document.getElementById('pdfjs-script');
     if (existingScript) existingScript.remove();
 
@@ -78,13 +188,13 @@ async function parsePdf(file) {
           text += content.items.map((item) => item.str).join(' ') + '\n';
         }
 
-        resolve(extractPoFromText(text));
+        resolve(await extractWithGroq(text));
       } catch (err) {
         reject(err);
       }
     };
 
-    script.onerror = () => reject(new Error('Failed to load PDF.js from CDN'));
+    script.onerror = () => reject(new Error('Failed to load PDF.js'));
     document.head.appendChild(script);
   });
 }
@@ -93,13 +203,13 @@ async function parsePdf(file) {
 async function parseDocx(file) {
   const data = await file.arrayBuffer();
   const result = await mammoth.extractRawText({ arrayBuffer: data });
-  return extractPoFromText(result.value);
+  return extractWithGroq(result.value);
 }
 
 // ---- Text ----
 async function parseTxt(file) {
   const text = await readTextFile(file);
-  return extractPoFromText(text);
+  return extractWithGroq(text);
 }
 
 function readTextFile(file) {
@@ -109,37 +219,4 @@ function readTextFile(file) {
     reader.onerror = reject;
     reader.readAsText(file);
   });
-}
-
-// ---- Extract PO from text ----
-function extractPoFromText(text) {
-  const header = emptyHeader();
-
-  const poMatch = text.match(/Purchase Order No\.?\s*([A-Z0-9]+)/i);
-  if (poMatch) header.PO_NO = poMatch[1];
-
-  const dateMatch = text.match(/P\.?O\.?\s*Date\s*([\d-]+)/i);
-  if (dateMatch) header.PURCHASE_ORDER_DATE = dateMatch[1];
-
-  const soldToMatch = text.match(/Sold To Party\s+(.+?)(?=Ship To Party|Buyer|$)/i);
-  if (soldToMatch) header.SOLD_TO_PARTY = soldToMatch[1].trim();
-
-  const shipToMatch = text.match(/Ship To Party\s+(.+?)(?=Buyer|$)/i);
-  if (shipToMatch) header.SHIP_TO_PARTY = shipToMatch[1].trim();
-
-  const rowRegex =
-    /(\d+)\s+([A-Z0-9]{3,})\s+(.+?)\s+(\d+)\s+(Kilogram|KG|kg|Nos|PCS)\s+([\d.]+)\s+(\d{2}-\d{2}-\d{4})/g;
-  const items = [];
-  let match;
-
-  while ((match = rowRegex.exec(text)) !== null) {
-    items.push({
-      MATERIAL_NUMBER: match[2],
-      QUANTITY: match[4],
-      SALES_UNIT: match[5],
-      DELIVERY_DATE: match[7],
-    });
-  }
-
-  return { header, items };
 }
