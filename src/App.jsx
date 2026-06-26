@@ -35,14 +35,20 @@ function App() {
   }
 
   return (
-    <div className="app-container">
-      <h1>Order Updation Tool</h1>
-      <FileUpload
-        onFileSelected={handleFileSelected}
-        status={status}
-        fileName={fileName}
-        errorMessage={errorMessage}
-      />
+    <div className="app-shell">
+      <div className="app-container">
+        <p className="eyebrow">Purchase Order Pipeline</p>
+        <h1>Order Updation Tool</h1>
+        <p className="subtitle">
+          Drop a purchase order — get back a structured Excel file, ready for upload.
+        </p>
+        <FileUpload
+          onFileSelected={handleFileSelected}
+          status={status}
+          fileName={fileName}
+          errorMessage={errorMessage}
+        />
+      </div>
     </div>
   );
 }
