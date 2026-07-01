@@ -23,13 +23,18 @@ export function generateExcel(processedData) {
     'Special Stock Partner(mandt)', 'FLAG'
   ];
 
-  const dataKeys = [
+  // Fields that are HEADER-level (shown only on first row of each plant group)
+  const headerKeys = [
     'ORDER_TYPE', 'SALES_ORG', 'DIST_CHNL', 'DIV',
     'SOLD_TO_PARTY', 'SHIP_TO_PARTY', 'PO_NO',
     'PURCHASE_ORDER_DATE', 'REQ_DELIVERY_DATE',
     'INCOTERM', 'INCOTERM2', 'ALT_TAX_CLASSF',
-    'PRICING_DATE', 'MATERIAL_NUMBER',
-    'VALUATION_TYPE', 'PLANT',
+    'PRICING_DATE',
+  ];
+
+  // Fields that are ITEM-level (repeated for every material row)
+  const itemKeys = [
+    'MATERIAL_NUMBER', 'VALUATION_TYPE', 'PLANT',
     'DELIVERY_DATE', 'GOODS_ISSUE_DATE',
     'LOADING_DATE', 'MATERIAL_AVAIL_DATE',
     'MATERIAL_AVAIL_DATE2', 'QUANTITY', 'SALES_UNIT',
@@ -45,9 +50,30 @@ export function generateExcel(processedData) {
     'SPECIAL_STOCK_PARTNER', 'FLAG'
   ];
 
+  // All keys in order (matches headers array)
+  const allKeys = [...headerKeys, ...itemKeys];
+
   const wsData = [headers];
+
+  // Group rows: common header fields shown only once per plant+soldTo group
+  // A new group starts when PLANT or SOLD_TO_PARTY changes
+  let lastGroupKey = null;
+
   processedData.forEach(row => {
-    wsData.push(dataKeys.map(key => row[key] ?? ''));
+    const groupKey = `${row.PLANT}__${row.SOLD_TO_PARTY}__${row.ORDER_TYPE}`;
+    const isNewGroup = groupKey !== lastGroupKey;
+    lastGroupKey = groupKey;
+
+    const excelRow = allKeys.map((key, idx) => {
+      // Header-level fields: only fill on first row of group, blank on subsequent rows
+      if (headerKeys.includes(key)) {
+        return isNewGroup ? (row[key] ?? '') : '';
+      }
+      // Item-level fields: always fill
+      return row[key] ?? '';
+    });
+
+    wsData.push(excelRow);
   });
 
   const wb = XLSX.utils.book_new();
