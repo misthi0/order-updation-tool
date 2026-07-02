@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import './App.css';
 import FileUpload from './components/FileUpload';
+import Background3D from './components/Background3D';
 import { parseFile } from './utils/parser';
 import { processData } from './utils/processor';
 import { generateExcel } from './utils/excelGenerator';
@@ -17,21 +18,24 @@ function App() {
       setFileName('');
       return;
     }
-
     setErrorMessage('');
     setFileName(file.name);
     setStatus('loading');
-
     try {
       const result = await parseFile(file);
+      console.log('Raw result from parseFile:', result);
+
       const header = result.header || {};
       const items = result.items || [];
+
+      console.log('Header:', header);
+      console.log('Items:', items);
 
       let rows = [];
 
       if (items.length > 0) {
         rows = items.map(item => ({
-          // Header-level fields — item value first, header as fallback
+          // ---- Header-level fields (shared across all rows) ----
           ORDER_TYPE:            item.ORDER_TYPE            || header.ORDER_TYPE            || '',
           PO_NO:                 item.PO_NO                 || header.PO_NO                 || '',
           PURCHASE_ORDER_DATE:   item.PURCHASE_ORDER_DATE   || header.PURCHASE_ORDER_DATE   || '',
@@ -43,13 +47,14 @@ function App() {
           PAYER:                 item.PAYER                 || header.PAYER                 || '',
           SPECIAL_STOCK_PARTNER: item.SPECIAL_STOCK_PARTNER || header.SPECIAL_STOCK_PARTNER || '',
 
-          // Per-item fields — item wins (each row has its own plant/location)
-          SALES_ORG:    item.PLANT        || header.PLANT        || '',
+          // ---- Per-item fields — item value FIRST, header as fallback only ----
+          // These differ per sheet (Chennai/AP/Limda etc) and per row (PTG/GMPD/RKT)
+          SALES_ORG:    item.PLANT        || header.PLANT        || '', // will be mapped by processor
           SOLD_TO_PARTY: item.SOLD_TO_PARTY || header.SOLD_TO_PARTY || '',
           SHIP_TO_PARTY: item.SHIP_TO_PARTY || header.SHIP_TO_PARTY || '',
           PLANT:         item.PLANT        || header.PLANT        || '',
 
-          // Item-specific fields
+          // ---- Item-specific fields ----
           MATERIAL_NUMBER:  item.MATERIAL_NUMBER  || '',
           QUANTITY:         item.QUANTITY         || '',
           SALES_UNIT:       item.SALES_UNIT        || '',
@@ -60,6 +65,7 @@ function App() {
           AMOUNT_2:         item.AMOUNT_2          || '',
         }));
       } else {
+        // No items — one row with header data only
         rows = [{
           ORDER_TYPE:            header.ORDER_TYPE            || '',
           SALES_ORG:             header.SALES_ORG             || '',
@@ -86,7 +92,9 @@ function App() {
         }];
       }
 
+      console.log('Rows to process:', rows);
       const processedData = processData(rows);
+      console.log('Processed data:', processedData);
       generateExcel(processedData);
       setStatus('success');
 
@@ -99,19 +107,33 @@ function App() {
 
   return (
     <div className="app-shell">
-      <div className="app-container">
-        <p className="eyebrow">Purchase Order Pipeline</p>
-        <h1>Order Updation Tool</h1>
-        <p className="subtitle">
-          Drop a purchase order — get back a structured Excel file, ready for upload.
-        </p>
-        <FileUpload
-          onFileSelected={handleFileSelected}
-          status={status}
-          fileName={fileName}
-          errorMessage={errorMessage}
-        />
+
+      {/* 3D Canvas Background */}
+      <Background3D />
+
+      {/* Aurora top bar */}
+      <div className="aurora" />
+
+      {/* Card */}
+      <div className="card-glow">
+        <div className="app-container">
+          <div className="eyebrow">
+            <span className="eyebrow-dot" />
+            Purchase Order Pipeline
+          </div>
+          <h1>Order Updation Tool</h1>
+          <p className="subtitle">
+            Drop a purchase order — get back a structured Excel file, ready for SAP upload.
+          </p>
+          <FileUpload
+            onFileSelected={handleFileSelected}
+            status={status}
+            fileName={fileName}
+            errorMessage={errorMessage}
+          />
+        </div>
       </div>
+
     </div>
   );
 }
